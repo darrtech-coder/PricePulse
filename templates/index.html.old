@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Product Price Tracker</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+</head>
+<body class="p-4">
+  <div class="container">
+    <h1>📦 Product Price Tracker</h1>
+
+    <!-- Add Supplier -->
+    <form id="addSupplierForm" class="row g-3 mb-3">
+      <div class="col-md-4">
+        <input id="newSupplier" type="text" class="form-control" placeholder="Add New Supplier" required>
+      </div>
+      <div class="col-md-2">
+        <button class="btn btn-secondary w-100" type="submit">Add Supplier</button>
+      </div>
+    </form>
+
+    <!-- Add Product -->
+    <form id="addProductForm" class="row g-3">
+      <div class="col-md-2"><input id="name" type="text" class="form-control" placeholder="Product Name" required></div>
+      <div class="col-md-2"><select id="supplier" class="form-select" required></select></div>
+      <div class="col-md-5"><input id="url" type="url" class="form-control" placeholder="Product URL" required></div>
+      <div class="col-md-3"><button class="btn btn-primary w-100" type="submit">Add Product</button></div>
+    </form>
+
+    <!-- Sync Button -->
+    <div class="mt-4">
+      <button class="btn btn-success" onclick="syncPrices()">🔁 Manual Sync Prices</button>
+    </div>
+
+    <!-- Product Table -->
+    <table class="table table-striped mt-4" id="productTable">
+      <thead>
+        <tr><th>ID</th><th>Name</th><th>Supplier</th><th>URL</th><th>Current Price</th><th>Last Updated</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      loadSuppliers();
+      fetchProducts();
+
+      document.getElementById("addProductForm").addEventListener("submit", function(e) {
+        e.preventDefault();
+        const name = document.getElementById("name").value;
+        const supplier = document.getElementById("supplier").value;
+        const url = document.getElementById("url").value;
+
+        fetch("/api/products", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, supplier, url })
+        }).then(() => {
+          fetchProducts();
+          this.reset();
+        });
+      });
+
+      document.getElementById("addSupplierForm").addEventListener("submit", function(e) {
+        e.preventDefault();
+        const supplier = document.getElementById("newSupplier").value;
+        fetch("/api/suppliers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ supplier })
+        }).then(() => {
+          loadSuppliers();
+          this.reset();
+        });
+      });
+    });
+
+    function fetchProducts() {
+      fetch("/api/products").then(res => res.json()).then(data => {
+        const tbody = document.querySelector("#productTable tbody");
+        tbody.innerHTML = "";
+        data.forEach(p => {
+          tbody.innerHTML += `<tr>
+            <td>${p["Product ID"]}</td>
+            <td>${p["Name"]}</td>
+            <td>${p["Supplier"]}</td>
+            <td><a href="${p["URL"]}" target="_blank">View</a></td>
+            <td>${p["Current Price"] || "N/A"}</td>
+            <td>${p["Last Updated"] || "N/A"}</td>
+          </tr>`;
+        });
+      });
+    }
+
+    function loadSuppliers() {
+      fetch("/api/suppliers").then(res => res.json()).then(data => {
+        const select = document.getElementById("supplier");
+        select.innerHTML = data.map(s => `<option value="${s}">${s}</option>`).join("");
+      });
+    }
+
+    function syncPrices() {
+      fetch("/api/sync", { method: "POST" }).then(() => {
+        fetchProducts();
+        alert("Prices synced!");
+      });
+    }
+  </script>
+</body>
+</html>

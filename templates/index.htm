@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Product Price Tracker</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    th.sortable { cursor: pointer; }
+    th.sortable:hover { text-decoration: underline; }
+    .highlight { background-color: #fff3cd; }
+  </style>
+</head>
+<body class="p-4">
+<div class="container">
+  <h1>📦 Product Price Tracker</h1>
+
+  <!-- Add Supplier -->
+  <form id="addSupplierForm" class="row g-3 mb-3">
+    <div class="col-md-4">
+      <input id="newSupplier" type="text" class="form-control" placeholder="Add New Supplier" required>
+    </div>
+    <div class="col-md-2">
+      <button class="btn btn-secondary w-100" type="submit">Add Supplier</button>
+    </div>
+  </form>
+
+  <!-- Add Product -->
+  <form id="addProductForm" class="row g-3">
+    <div class="col-md-2"><input id="name" type="text" class="form-control" placeholder="Name" required></div>
+    <div class="col-md-2"><input id="category" type="text" class="form-control" placeholder="Category"></div>
+    <div class="col-md-2"><select id="supplier" class="form-select" required></select></div>
+    <div class="col-md-4"><input id="url" type="url" class="form-control" placeholder="URL" required></div>
+    <div class="col-md-2"><button class="btn btn-primary w-100" type="submit">Add Product</button></div>
+  </form>
+
+  <!-- Search and Filter -->
+  <div class="row mb-3 mt-4">
+    <div class="col-md-5"><input type="text" id="searchInput" class="form-control" placeholder="Search..." oninput="renderTable()"></div>
+    <div class="col-md-3"><select id="filterSupplier" class="form-select" onchange="renderTable()"></select></div>
+    <div class="col-md-2"><button class="btn btn-success" onclick="syncPrices()">🔁 Sync</button></div>
+    <div class="col-md-2"><a class="btn btn-outline-info w-100" href="/api/export">⬇️ Export</a></div>
+  </div>
+
+  <!-- Product Table -->
+  <table class="table table-striped" id="productTable">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Name</th>
+        <th>Category</th>
+        <th>Supplier</th>
+        <th>URL</th>
+        <th>Current</th>
+        <th>Last</th>
+        <th class="sortable" onclick="sortByColumn('Last Updated')">Last Updated &#x25BC;</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<!-- Modal for Editing -->
+<div class="modal fade" id="editModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Edit Product</h5></div>
+      <div class="modal-body">
+        <input id="editId" type="hidden">
+        <input id="editName" class="form-control mb-2" placeholder="Name">
+        <input id="editCategory" class="form-control mb-2" placeholder="Category">
+        <input id="editSupplier" class="form-control mb-2" placeholder="Supplier">
+        <input id="editUrl" class="form-control mb-2" placeholder="URL">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" onclick="submitEdit()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+let productsData = [], sortDesc = true;
+
+function fetchProducts() {
+  fetch("/api/products").then(res => res.json()).then(data => {
+    productsData = data;
+    renderTable();
+  });
+}
+
+function loadSuppliers() {
+  fetch("/api/suppliers").then(res => res.json()).then(data => {
+    const s = document.getElementById("supplier");
+    const f = document.getElementById("filterSupplier");
+    s.innerHTML = data.map(d => `<option>${d}</option>`).join("");
+    f.innerHTML = `<option value="">All Suppliers</option>` + data.map(d => `<option>${d}</option>`).join("");
+  });
+}
+
+function renderTable() {
+  const search = document.getElementById("searchInput").value.toLowerCase();
+  const supplierFilter = document.getElementById("filterSupplier").value;
+  const tbody = document.querySelector("#productTable tbody");
+  tbody.innerHTML = "";
+
+  productsData.filter(p => {
+    const matchText = (p["Name"] || "").toLowerCase().includes(search) || (p["URL"] || "").toLowerCase().includes(search);
+    const matchSupplier = !supplierFilter || p["Supplier"] === supplierFilter;
+    return matchText && matchSupplier;
+  }).forEach(p => {
+    const highlight = p["Status"] === "UPDATED" ? "highlight" : "";
+    tbody.innerHTML += `<tr class="${highlight}">
+      <td>${p["Product ID"]}</td>
+      <td>${p["Name"] || ""}</td>
+      <td>${p["Category"] || ""}</td>
+      <td>${p["Supplier"] || ""}</td>
+      <td><a href="${p["URL"]}" target="_blank">Link</a></td>
+      <td>${p["Current Price"] ?? ""}</td>
+      <td>${p["Last Price"] ?? ""}</td>
+      <td>${p["Last Updated"] || ""}</td>
+      <td>
+        <button class="btn btn-sm btn-primary" onclick="openEdit(${p["Product ID"]})">✏️</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteProduct(${p["Product ID"]})">🗑️</button>
+      </td>
+    </tr>`;
+  });
+}
+
+function sortByColumn(col) {
+  sortDesc = !sortDesc;
+  productsData.sort((a, b) => {
+    let dA = new Date(a[col] || 0);
+    let dB = new Date(b[col] || 0);
+    return sortDesc ? dB - dA : dA - dB;
+  });
+  renderTable();
+}
+
+function syncPrices() {
+  fetch("/api/sync", { method: "POST" }).then(() => fetchProducts());
+}
+
+function openEdit(id) {
+  const p = productsData.find(x => x["Product ID"] === id);
+  if (!p) return;
+  document.getElementById("editId").value = id;
+  document.getElementById("editName").value = p["Name"];
+  document.getElementById("editCategory").value = p["Category"];
+  document.getElementById("editSupplier").value = p["Supplier"];
+  document.getElementById("editUrl").value = p["URL"];
+  new bootstrap.Modal(document.getElementById("editModal")).show();
+}
+
+function submitEdit() {
+  const id = document.getElementById("editId").value;
+  const body = {
+    name: document.getElementById("editName").value,
+    category: document.getElementById("editCategory").value,
+    supplier: document.getElementById("editSupplier").value,
+    url: document.getElementById("editUrl").value
+  };
+  fetch(`/api/products/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  }).then(() => {
+    bootstrap.Modal.getInstance(document.getElementById("editModal")).hide();
+    fetchProducts();
+  });
+}
+
+function deleteProduct(id) {
+  if (!confirm("Are you sure?")) return;
+  fetch(`/api/products/${id}`, { method: "DELETE" }).then(() => fetchProducts());
+}
+
+// Init
+fetchProducts();
+loadSuppliers();
+
+// Add product
+addProductForm.onsubmit = e => {
+  e.preventDefault();
+  const body = {
+    name: name.value,
+    category: category.value,
+    supplier: supplier.value,
+    url: url.value
+  };
+  fetch("/api/products", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  }).then(() => {
+    fetchProducts();
+    addProductForm.reset();
+  });
+};
+
+// Add supplier
+addSupplierForm.onsubmit = e => {
+  e.preventDefault();
+  fetch("/api/suppliers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ supplier: newSupplier.value })
+  }).then(() => {
+    loadSuppliers();
+    addSupplierForm.reset();
+  });
+};
+</script>
+</body>
+</html>
