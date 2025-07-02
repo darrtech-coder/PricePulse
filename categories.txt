@@ -7,3 +7,24 @@ Glassware
 Bottles
 Cups
 Straw
+CPU
+RAM
+Computers & Accessories
+Mobile Phones
+Home Appliances
+Gaming
+Fashion & Apparel
+Health & Beauty
+Automotive
+Toys & Hobbies
+Office Supplies
+Books & Media
+Groceries
+Pet Supplies
+Tools & Hardware
+Sports & Outdoors
+Furniture
+Jewelry & Watches
+Home & Garden
+Cameras & Photography
+Baby Products
