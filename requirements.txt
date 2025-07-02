@@ -4,7 +4,6 @@ openpyxl
 python-dateutil
 requests
 beautifulsoup4
-threading
 time
 datetime
 json 
