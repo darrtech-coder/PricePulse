@@ -1,8 +1,9 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Product Price Tracker</title>
+  <title>PricePulse</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
     th.sortable { cursor: pointer; }
@@ -12,7 +13,7 @@
 </head>
 <body class="p-4">
 <div class="container">
-  <h1>📦 Product Price Tracker</h1>
+  <h1>📦 PricePulse</h1>
 
   <!-- Add Supplier -->
   <form id="addSupplierForm" class="row g-3 mb-3">
@@ -22,17 +23,19 @@
     <div class="col-md-2">
       <button class="btn btn-secondary w-100" type="submit">Add Supplier</button>
     </div>
+<div id="notification"  class="col-md-2"></div>
   </form>
 
   <!-- Add Category -->
   <form id="addCategoryForm" class="row g-3 mb-3">
     <div class="col-md-4">
-      <input id="newCategory" type="text" class="form-control" placeholder="Add New Category" required>
+      <input id="newCategory" type="text" class="form-control" placeholder="Add New Category" required><a href="/api/export/xlsx" download>Download XLSX</a>
     </div>
     <div class="col-md-2">
-      <button class="btn btn-secondary w-100" type="submit">Add Category</button>
+      <button class="btn btn-secondary w-100" type="submit">Add Category</button><a href="/api/export/csv" download>Download CSV</a>
     </div>
   </form>
+
 
   <!-- Add Product -->
 <form id="addProductForm" class="row g-3">
@@ -58,7 +61,13 @@
     <div class="col-md-4"><input type="text" id="searchInput" class="form-control" placeholder="Search..." oninput="renderTable()"></div>
     <div class="col-md-3"><select id="filterSupplier" class="form-select" onchange="renderTable()"></select></div>
     <div class="col-md-3"><select id="filterCategory" class="form-select" onchange="renderTable()"></select></div>
-    <div class="col-md-2"><button class="btn btn-success w-100" onclick="syncPrices()">🔁 Sync</button></div>
+    <div class="col-md-2"><button class="btn btn-success w-100" onclick="syncNow()">🔁 Sync</button>
+<span id="sync-status"></span></div>
+
+<div>
+  <label for="auto-sync-toggle">Auto Sync:</label>
+  <input type="checkbox" id="auto-sync-toggle" />
+</div>
   </div>
 
   <!-- Product Table -->
@@ -68,6 +77,7 @@
         <th>ID</th><th>Name</th><th>Category</th><th>Supplier</th><th>URL</th>
         <th>Current</th><th>Last</th>
         <th class="sortable" onclick="sortByColumn('Last Updated')">Last Updated ⬇️</th>
+    <th>Last Sync</th> 
         <th>Actions</th>
       </tr>
     </thead>
@@ -77,6 +87,22 @@
   <!-- Chart Section -->
   <h3>📊 Average Price per Category</h3>
   <canvas id="analyticsChart" height="100"></canvas>
+</div>
+
+<!-- Price History Modal -->
+<div class="modal fade" id="priceHistoryModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Price History</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <canvas id="priceHistoryChart"></canvas>
+        <p id="noHistoryMessage" class="text-muted text-center mt-3" style="display: none;">No price history available for this product.</p>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -109,8 +135,8 @@ function formatCurrency(value) {
 }
 
 function getPriceChangeIcon(current, last) {
-  if (current > last) return '<span style="color:green;">▲</span>';
-  if (current < last) return '<span style="color:red;">▼</span>';
+  if (current > last) return '<span style="color:red;">▲</span>';
+  if (current < last) return '<span style="color:green;">▼</span>';
   return '<span style="color:gray;">–</span>';
 }
 
@@ -143,13 +169,16 @@ function renderTable() {
       <td>${currentFormatted} ${arrow}</td>
       <td>${lastFormatted}</td>
       <td>${p["Last Updated"] ? new Date(p["Last Updated"]).toLocaleString() : "-"}</td>
-      <td>
-        <button class="btn btn-sm btn-primary" onclick="openEdit(${p["Product ID"]})">✏️</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteProduct(${p["Product ID"]})">🗑️</button>
-      </td>
+      <td>${p["Last Sync"] ? new Date(p["Last Sync"]).toLocaleString() : "-"}</td> <!-- ✅ Added Last Sync -->
+<td>
+  <button class="btn btn-sm btn-primary" onclick="openEdit(${p["Product ID"]})">✏️</button>
+  <button class="btn btn-sm btn-danger" onclick="deleteProduct(${p["Product ID"]})">🗑️</button>
+  <button class="btn btn-sm btn-info" onclick="showPriceHistory(${p["Product ID"]})">📈</button>
+</td>
     </tr>`;
   });
 }
+
 
 function sortByColumn(col) {
   sortDesc = !sortDesc;
@@ -247,6 +276,94 @@ addCategoryForm.onsubmit = e => {
     body: JSON.stringify({ category: newCategory.value })
   }).then(() => { loadCategories(); addCategoryForm.reset(); });
 };
+
+  async function updateSyncUI() {
+    const res = await fetch('/api/sync/status');
+    const { status } = await res.json();
+    document.getElementById('auto-sync-toggle').checked = (status === 'enabled');
+  }
+
+  document.getElementById('auto-sync-toggle').addEventListener('change', async function () {
+    const status = this.checked ? 'enabled' : 'disabled';
+    await fetch('/api/sync/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status })
+    });
+  });
+
+  updateSyncUI();
+
+async function syncNow() {
+  const statusElem = document.getElementById("sync-status");
+  showNotification("🔄 Syncing prices...");
+  statusElem.textContent = "🔄 Syncing...";
+
+  const res = await fetch("/api/sync", { method: "POST" });
+  const result = await res.json();
+
+  showNotification(`✅ Sync complete. ${result.updated} updated, ${result.unchanged} unchanged.`);
+  statusElem.textContent = `✅ ${result.updated} prices changed, ${result.unchanged} unchanged`;
+
+  // Refresh product list and table
+  await fetchProducts();
+}
+
+function showNotification(msg) {
+  const n = document.getElementById("notification");
+  n.innerText = msg;
+  n.style.display = "block";
+  setTimeout(() => n.style.display = "none", 4000);
+}
+
+
+let priceChartInstance = null;
+
+async function showPriceHistory(productId) {
+  const res = await fetch(`/api/products/${productId}/history`);
+  const data = await res.json();
+
+  const history = data.history || [];
+
+  const modal = new bootstrap.Modal(document.getElementById('priceHistoryModal'));
+  const ctx = document.getElementById('priceHistoryChart').getContext('2d');
+  const noHistory = document.getElementById('noHistoryMessage');
+
+  if (!history.length) {
+    noHistory.style.display = "block";
+    if (priceChartInstance) priceChartInstance.destroy();
+  } else {
+    noHistory.style.display = "none";
+
+    const labels = history.map(h => new Date(h.date).toLocaleString());
+    const prices = history.map(h => h.price);
+
+    if (priceChartInstance) priceChartInstance.destroy(); // clear existing chart
+
+    priceChartInstance = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: "Price Over Time",
+          data: prices,
+          borderColor: "blue",
+          fill: false,
+          tension: 0.1
+        }]
+      },
+      options: {
+        scales: {
+          x: { title: { display: true, text: 'Date' }},
+          y: { title: { display: true, text: 'Price ($)' }}
+        }
+      }
+    });
+  }
+
+  modal.show();
+}
+
 </script>
 </body>
 </html>
