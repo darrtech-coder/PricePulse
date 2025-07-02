@@ -1,4 +1,3 @@
-
 import requests
 from bs4 import BeautifulSoup
 import re
@@ -23,7 +22,26 @@ def fetch_price_from_url(url, supplier):
             if match:
                 return float(match.group(1))
 
-        # === SHOPIFY-LIKE === (Shopify Collective, Spocket, DSers, Zendrop, CJDropshipping, AutoDS, Modalyst, etc.)
+        # === NEWEGG ===
+        if "newegg" in supplier or "newegg.com" in url:
+            for script in soup.find_all("script", type="application/ld+json"):
+                try:
+                    data = json.loads(script.string.strip())
+                    if isinstance(data, dict) and "offers" in data:
+                        offers = data["offers"]
+                        if isinstance(offers, dict) and "price" in offers:
+                            return float(offers["price"])
+                except Exception:
+                    continue
+
+            # Fallback: Look for price in visible HTML
+            price_div = soup.find("li", class_="price-current")
+            if price_div:
+                match = re.search(r"\$([\d,.]+)", price_div.text)
+                if match:
+                    return float(match.group(1).replace(",", ""))
+
+        # === SHOPIFY-LIKE ===
         if any(key in supplier for key in [
             "shopify", "spocket", "dsers", "zendrop", "cjdropshipping", "modalyst", "autods", "shopify collective"
         ]):
