@@ -1,5 +1,6 @@
 flask
 pandas
 openpyxl
+python-dateutil
 requests
-gunicorn
+beautifulsoup4
