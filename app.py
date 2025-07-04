@@ -1,38 +1,47 @@
-# app.py
 from flask import Flask, jsonify, request, send_file, render_template
-import pandas as pd
+import sqlite3
 import os
 import json
+from datetime import datetime
 from dateutil.parser import parse as parse_date
 from utils import fetch_price_from_url
 import thread
 thread.start_auto_sync()
 
-
 app = Flask(__name__)
-
-PRODUCT_FILE = "products.xlsx"
+DB_FILE = "database.db"
 SUPPLIER_FILE = "suppliers.txt"
 CATEGORY_FILE = "categories.txt"
-HISTORY_FILE = "product_history.xlsx"
 
-# Initialize Excel and supporting files if missing
-if not os.path.exists(PRODUCT_FILE):
-    df = pd.DataFrame(columns=[
-        "Product ID", "Name", "Category", "Supplier", "URL",
-        "Current Price", "Last Price", "Last Updated", "Last Sync", "Status"
-    ])
-    df.to_excel(PRODUCT_FILE, index=False)
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS products (
+        product_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        category TEXT,
+        supplier TEXT,
+        url TEXT,
+        current_price REAL,
+        last_price REAL,
+        last_updated TEXT,
+        last_sync TEXT,
+        status TEXT
+    )''')
 
-if not os.path.exists(SUPPLIER_FILE):
-    with open(SUPPLIER_FILE, "w") as f:
-        f.write("AliExpress\nWooCommerce")
+    c.execute('''CREATE TABLE IF NOT EXISTS price_history (
+        product_id INTEGER,
+        date TEXT,
+        old_price REAL,
+        new_price REAL,
+        change REAL,
+        price_history TEXT,
+        PRIMARY KEY (product_id)
+    )''')
+    conn.commit()
+    conn.close()
 
-if not os.path.exists(CATEGORY_FILE):
-    with open(CATEGORY_FILE, "w") as f:
-        f.write("Electronics\nClothing\nAccessories")
-
-
+init_db()
 
 @app.route("/")
 def home():
@@ -40,84 +49,78 @@ def home():
 
 @app.route("/api/products", methods=["GET"])
 def get_products():
-    df = pd.read_excel(PRODUCT_FILE)
-    df = df.where(pd.notnull(df), None)
-    if "Last Updated" in df.columns:
-        def clean_date(val):
-            if pd.isnull(val): return None
-            if isinstance(val, str):
-                try: val = parse_date(val)
-                except: return val
-            try: return val.isoformat()
-            except: return None
-        df["Last Updated"] = df["Last Updated"].apply(clean_date)
-    return jsonify(df.to_dict(orient="records"))
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    rows = c.execute("SELECT * FROM products").fetchall()
+    colnames = [desc[0] for desc in c.description]
+    conn.close()
+    
+    products = [dict(zip(colnames, row)) for row in rows]
+    for p in products:
+        for k in ["last_updated", "last_sync"]:
+            if p[k]:
+                try:
+                    p[k] = parse_date(p[k]).isoformat()
+                except:
+                    pass
+    return jsonify(products)
 
 @app.route("/api/products", methods=["POST"])
 def add_product():
     data = request.json
-    df = pd.read_excel(PRODUCT_FILE)
-    new_id = df["Product ID"].max() + 1 if not df.empty else 1
-    new_row = {
-        "Product ID": new_id,
-        "Name": data["name"],
-        "Category": data.get("category", ""),
-        "Supplier": data["supplier"],
-        "URL": data["url"],
-        "Current Price": fetch_price_from_url(data["url"], data["supplier"]) or 0,  # Set to 0 initially
-        "Last Price": fetch_price_from_url(data["url"], data["supplier"]) or 0,     # Same as current price
-        "Last Updated": pd.Timestamp.now(),  # Current datetime
-        "Status": "new"
-    }
-    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-    df.to_excel(PRODUCT_FILE, index=False)
+    now = datetime.utcnow().isoformat()
+    price = fetch_price_from_url(data["url"], data["supplier"]) or 0
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''INSERT INTO products
+        (name, category, supplier, url, current_price, last_price, last_updated, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+        (data["name"], data.get("category", ""), data["supplier"], data["url"], price, price, now, "new"))
+    conn.commit()
+    conn.close()
     return jsonify({"message": "Product added"})
 
 @app.route("/api/products/<int:pid>", methods=["PUT"])
 def update_product(pid):
     data = request.json
-    df = pd.read_excel(PRODUCT_FILE)
-    if pid not in df["Product ID"].values:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM products WHERE product_id = ?", (pid,))
+    if not c.fetchone():
+        conn.close()
         return jsonify({"error": "Product not found"}), 404
-    idx = df.index[df["Product ID"] == pid][0]
-    for field in ["Name", "URL", "Supplier", "Category"]:
+
+    for field in ["name", "url", "supplier", "category"]:
         if field in data:
-            df.at[idx, field] = data[field]
-    df.to_excel(PRODUCT_FILE, index=False)
+            c.execute(f"UPDATE products SET {field} = ? WHERE product_id = ?", (data[field], pid))
+    conn.commit()
+    conn.close()
     return jsonify({"message": "Product updated"})
 
 @app.route("/api/products/<int:pid>", methods=["DELETE"])
 def delete_product(pid):
-    df = pd.read_excel(PRODUCT_FILE)
-    df = df[df["Product ID"] != pid]
-    df.to_excel(PRODUCT_FILE, index=False)
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM products WHERE product_id = ?", (pid,))
+    conn.commit()
+    conn.close()
     return jsonify({"message": "Product deleted"})
-
-
 
 @app.route("/api/products/<int:product_id>/history", methods=["GET"])
 def get_price_history(product_id):
-    df = pd.read_excel(HISTORY_FILE)
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    row = c.execute("SELECT price_history FROM price_history WHERE product_id = ?", (product_id,)).fetchone()
+    conn.close()
 
-    # Find the product row
-    product_row = df[df["Product ID"] == product_id]
-    if product_row.empty:
-        return jsonify({"error": "Product not found"}), 404
-
-    # Extract and parse the price history
-    raw_history = product_row.iloc[0].get("Price History")
-    if pd.isna(raw_history) or not raw_history:
-        return jsonify({"history": []})  # Return empty if missing
-
+    if not row or not row[0]:
+        return jsonify({"history": []})
     try:
-        history = json.loads(raw_history)
-    except Exception:
+        history = json.loads(row[0])
+    except:
         return jsonify({"error": "Invalid price history format"}), 500
-
     return jsonify({"history": history})
-
-
-
 
 @app.route("/api/suppliers", methods=["GET"])
 def get_suppliers():
@@ -147,111 +150,70 @@ def add_category():
         f.write(f"{name}\n")
     return jsonify({"message": "Category added"})
 
-@app.route("/api/export")
-def export_excel():
-    return send_file(PRODUCT_FILE, as_attachment=True)
-
 @app.route("/api/sync", methods=["POST"])
 def sync_prices():
-    df = pd.read_excel(PRODUCT_FILE)
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    rows = c.execute("SELECT * FROM products").fetchall()
+    columns = [desc[0] for desc in c.description]
     updated = 0
     unchanged = 0
 
-    history_file = "product_history.xlsx"
-    if os.path.exists(history_file):
-        history_df = pd.read_excel(history_file)
-    else:
-        history_df = pd.DataFrame(columns=["Product ID", "Date", "Old Price", "New Price", "Change", "Price History"])
+    now = datetime.utcnow().isoformat()
 
-    for i, row in df.iterrows():
-        pid = row["Product ID"]
-        url = row["URL"]
-        supplier = row["Supplier"]
-        current_price = row["Current Price"]
+    for row in rows:
+        row_dict = dict(zip(columns, row))
+        pid = row_dict["product_id"]
+        new_price = fetch_price_from_url(row_dict["url"], row_dict["supplier"])
 
-        new_price = fetch_price_from_url(url, supplier)
-        now = pd.Timestamp.now()
-        df.at[i, "Last Sync"] = now
+        c.execute("UPDATE products SET last_sync = ? WHERE product_id = ?", (now, pid))
 
-        if new_price is not None and new_price != current_price:
-            df.at[i, "Last Price"] = current_price
-            df.at[i, "Current Price"] = new_price
-            df.at[i, "Last Updated"] = now
-            df.at[i, "Status"] = "UPDATED"
+        if new_price is not None and new_price != row_dict["current_price"]:
             updated += 1
+            c.execute("""
+                UPDATE products SET
+                    last_price = ?,
+                    current_price = ?,
+                    last_updated = ?,
+                    status = 'UPDATED'
+                WHERE product_id = ?
+            """, (row_dict["current_price"], new_price, now, pid))
 
-            # Get previous history
-            existing_row = history_df[history_df["Product ID"] == pid]
-            if not existing_row.empty:
+            prev = c.execute("SELECT price_history FROM price_history WHERE product_id = ?", (pid,)).fetchone()
+            history_list = []
+            if prev and prev[0]:
                 try:
-                    history_list = json.loads(existing_row.iloc[0]["Price History"])
-                except Exception:
+                    history_list = json.loads(prev[0])
+                except:
                     history_list = []
-                # Drop the old entry
-                history_df = history_df[history_df["Product ID"] != pid]
-            else:
-                history_list = []
 
-            # Append new price record
-            history_list.append({"date": now.isoformat(), "price": new_price})
+            history_list.append({"date": now, "price": new_price})
 
-            # Save updated row
-            updated_row = {
-                "Product ID": pid,
-                "Date": now,
-                "Old Price": current_price,
-                "New Price": new_price,
-                "Change": new_price - current_price,
-                "Price History": json.dumps(history_list)
-            }
-
-            history_df = pd.concat([history_df, pd.DataFrame([updated_row])], ignore_index=True)
+            c.execute("REPLACE INTO price_history VALUES (?, ?, ?, ?, ?, ?)", (
+                pid, now, row_dict["current_price"], new_price,
+                new_price - row_dict["current_price"],
+                json.dumps(history_list)
+            ))
         else:
             unchanged += 1
 
-    df.to_excel(PRODUCT_FILE, index=False)
-    history_df.to_excel(history_file, index=False)
-
-    return jsonify({
-        "message": "Sync complete",
-        "updated": updated,
-        "unchanged": unchanged
-    })
-
-
-@app.route("/api/sync/status", methods=["GET"])
-def get_sync_status():
-    try:
-        with open("sync_status.txt") as f:
-            return jsonify({"status": f.read().strip()})
-    except FileNotFoundError:
-        return jsonify({"status": "disabled"})
-
-@app.route("/api/sync/status", methods=["POST"])
-def set_sync_status():
-    status = request.json.get("status")
-    if status not in ["enabled", "disabled"]:
-        return jsonify({"error": "Invalid status"}), 400
-    with open("sync_status.txt", "w") as f:
-        f.write(status)
-    return jsonify({"message": f"Auto-sync {status}"})
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Sync complete", "updated": updated, "unchanged": unchanged})
 
 @app.route("/api/analytics")
 def analytics():
-    df = pd.read_excel(PRODUCT_FILE)
-    result = df.groupby("Category")["Current Price"].mean().dropna().to_dict()
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    data = c.execute("SELECT category, current_price FROM products WHERE current_price IS NOT NULL").fetchall()
+    conn.close()
+    result = {}
+    for cat, price in data:
+        if cat not in result:
+            result[cat] = []
+        result[cat].append(price)
+    result = {k: sum(v)/len(v) for k, v in result.items() if v}
     return jsonify(result)
-
-@app.route("/api/export/<fmt>")
-def export_data(fmt):
-    df = pd.read_excel(PRODUCT_FILE)
-    if fmt == "csv":
-        path = "products.csv"
-        df.to_csv(path, index=False)
-    else:
-        path = "products.xlsx"
-        df.to_excel(path, index=False)
-    return send_file(path, as_attachment=True)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000, debug=True)

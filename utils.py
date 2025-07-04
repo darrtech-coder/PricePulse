@@ -1,7 +1,10 @@
+# utils.py
+
 import requests
 from bs4 import BeautifulSoup
 import re
 import json
+
 
 def fetch_price_from_url(url, supplier):
     try:
@@ -13,82 +16,115 @@ def fetch_price_from_url(url, supplier):
         soup = BeautifulSoup(html, "html.parser")
         supplier = supplier.lower()
 
-        # === ALIEXPRESS ===
-        if "aliexpress" in supplier or "aliexpress.com" in url:
-            price_meta = soup.find("meta", {"itemprop": "price"})
-            if price_meta and price_meta.get("content"):
-                return float(price_meta["content"])
-            match = re.search(r'"salePrice":\s*\{"formattedValue":"\$([\d\.]+)"\}', html)
-            if match:
-                return float(match.group(1))
-
-        # === NEWEGG ===
         if "newegg" in supplier or "newegg.com" in url:
-            for script in soup.find_all("script", type="application/ld+json"):
-                try:
-                    data = json.loads(script.string.strip())
-                    if isinstance(data, dict) and "offers" in data:
-                        offers = data["offers"]
-                        if isinstance(offers, dict) and "price" in offers:
-                            return float(offers["price"])
-                except Exception:
-                    continue
+            return extract_price_newegg(soup, html)
 
-            # Fallback: Look for price in visible HTML
-            price_div = soup.find("li", class_="price-current")
-            if price_div:
-                match = re.search(r"\$([\d,.]+)", price_div.text)
-                if match:
-                    return float(match.group(1).replace(",", ""))
+        if "aliexpress" in supplier or "aliexpress.com" in url:
+            return extract_price_aliexpress(soup, html)
 
-        # === SHOPIFY-LIKE ===
         if any(key in supplier for key in [
-            "shopify", "spocket", "dsers", "zendrop", "cjdropshipping", "modalyst", "autods", "shopify collective"
+            "shopify", "spocket", "dsers", "zendrop", "cjdropshipping",
+            "modalyst", "autods", "shopify collective"
         ]):
-            meta_price = soup.find("meta", {"property": "product:price:amount"})
-            if meta_price and meta_price.get("content"):
-                return float(meta_price["content"])
-            for script in soup.find_all("script", type="application/ld+json"):
-                try:
-                    data = json.loads(script.string.strip())
-                    if isinstance(data, dict) and "offers" in data:
-                        offers = data["offers"]
-                        if isinstance(offers, dict) and "price" in offers:
-                            return float(offers["price"])
-                except:
-                    continue
-            span = soup.find("span", class_="price")
-            if span:
-                match = re.search(r"([\d,.]+)", span.text)
-                if match:
-                    return float(match.group(1).replace(",", ""))
+            return extract_price_shopify(soup, html)
 
-        # === WOOCOMMERCE ===
         if "woocommerce" in supplier:
-            meta_price = soup.find("meta", {"property": "product:price:amount"})
-            if meta_price and meta_price.get("content"):
-                return float(meta_price["content"])
-            for script in soup.find_all("script", type="application/ld+json"):
-                try:
-                    data = json.loads(script.string.strip())
-                    if isinstance(data, dict) and "offers" in data:
-                        offers = data["offers"]
-                        if isinstance(offers, dict) and "price" in offers:
-                            return float(offers["price"])
-                except:
-                    continue
-            span = soup.find("span", class_="woocommerce-Price-amount")
-            if span:
-                match = re.search(r"([\d,.]+)", span.text)
-                if match:
-                    return float(match.group(1).replace(",", ""))
+            return extract_price_woocommerce(soup, html)
 
-        # === OTHERS (Fallback) ===
-        if "price" in html.lower():
-            match = re.search(r'"price"\s*:\s*"?([\d.]+)"?', html)
-            if match:
-                return float(match.group(1))
+        return extract_price_fallback(html)
 
     except Exception as e:
         print(f"[ERROR] {supplier} scraping failed: {e}")
+        return None
+
+
+def extract_price_newegg(soup, html):
+    # Look for JSON price schema
+    try:
+        for script in soup.find_all("script", type="application/ld+json"):
+            data = json.loads(script.string.strip())
+            if isinstance(data, dict) and "offers" in data:
+                price = data["offers"].get("price")
+                if price:
+                    return float(price)
+    except Exception:
+        pass
+
+    # HTML fallback
+    price_elem = soup.select_one(".price-current strong")
+    decimal_elem = soup.select_one(".price-current sup")
+    if price_elem and decimal_elem:
+        return float(price_elem.text.strip().replace(",", "") + decimal_elem.text.strip())
+
+    match = re.search(r'"price"\s*:\s*"([\d.]+)"', html)
+    if match:
+        return float(match.group(1))
+
+    return None
+
+
+def extract_price_aliexpress(soup, html):
+    price_meta = soup.find("meta", {"itemprop": "price"})
+    if price_meta and price_meta.get("content"):
+        return float(price_meta["content"])
+
+    match = re.search(r'"salePrice":\s*\{"formattedValue":"\$([\d\.]+)"\}', html)
+    if match:
+        return float(match.group(1))
+
+    return None
+
+
+def extract_price_shopify(soup, html):
+    meta_price = soup.find("meta", {"property": "product:price:amount"})
+    if meta_price and meta_price.get("content"):
+        return float(meta_price["content"])
+
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(script.string.strip())
+            if isinstance(data, dict) and "offers" in data:
+                offers = data["offers"]
+                if isinstance(offers, dict) and "price" in offers:
+                    return float(offers["price"])
+        except:
+            continue
+
+    span = soup.find("span", class_="price")
+    if span:
+        match = re.search(r"([\d,.]+)", span.text)
+        if match:
+            return float(match.group(1).replace(",", ""))
+
+    return None
+
+
+def extract_price_woocommerce(soup, html):
+    meta_price = soup.find("meta", {"property": "product:price:amount"})
+    if meta_price and meta_price.get("content"):
+        return float(meta_price["content"])
+
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(script.string.strip())
+            if isinstance(data, dict) and "offers" in data:
+                offers = data["offers"]
+                if isinstance(offers, dict) and "price" in offers:
+                    return float(offers["price"])
+        except:
+            continue
+
+    span = soup.find("span", class_="woocommerce-Price-amount")
+    if span:
+        match = re.search(r"([\d,.]+)", span.text)
+        if match:
+            return float(match.group(1).replace(",", ""))
+
+    return None
+
+
+def extract_price_fallback(html):
+    match = re.search(r'"price"\s*:\s*"?([\d.]+)"?', html)
+    if match:
+        return float(match.group(1))
     return None
