@@ -245,20 +245,34 @@ def check_updates():
         print(f"[Update Check Error] {e}")
         return jsonify({"error": "Failed to check for updates"}), 500
 
+
+
 @app.route("/api/install-updates", methods=["POST"])
 def install_updates():
     try:
-        # Optional: ensure you're in the project root
         repo_path = os.path.dirname(os.path.abspath(__file__))
-        subprocess.check_call(["git", "pull"], cwd=repo_path)
 
-        # Optional: you can also re-read version file to confirm update
-        new_version = get_current_version()
+        # Ensure branch and pull latest changes
+        subprocess.check_call(["git", "fetch"], cwd=repo_path)
+        subprocess.check_call(["git", "checkout", "sqlite-render.com"], cwd=repo_path)
+        subprocess.check_call(["git", "pull", "origin", "sqlite-render.com"], cwd=repo_path)
 
-        return jsonify({"message": f"Update installed. Current version: {new_version}"})
+        # Optional: reinstall dependencies if needed
+        req_path = os.path.join(repo_path, "requirements.txt")
+        if os.path.exists(req_path):
+            subprocess.check_call(["pip", "install", "-r", req_path], cwd=repo_path)
+
+        # Optional: restart app via systemd or supervisor here if required
+        # subprocess.check_call(["sudo", "systemctl", "restart", "pricepulse.service"])
+
+        new_version = check_updates()
+        return jsonify({"message": f"✅ Update installed. Current version: {new_version}"})
+
     except subprocess.CalledProcessError as e:
-        print(f"[Update Install Error] {e}")
-        return jsonify({"error": "Update failed"}), 500
+        print(f"[Install Error] {e}")
+        return jsonify({"error": "❌ Update failed"}), 500
+
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000, debug=True)
