@@ -3,6 +3,7 @@ import sqlite3
 import os
 import json
 import subprocess
+import requests
 from datetime import datetime
 from dateutil.parser import parse as parse_date
 from utils import fetch_price_from_url
@@ -230,8 +231,8 @@ def analytics():
 def check_updates():
     try:
         current_version = get_current_version()
-        remote_version_url = "https://raw.githubusercontent.com/darrtech-coder/PricePulse/main/version"
-        response = requests.get(remote_version_url, timeout=5)
+        remote_version_url = "https://raw.githubusercontent.com/darrtech-coder/PricePulse/sqlite-render.com/version"
+        response = requests.get(remote_version_url, timeout=500)
         latest_version = response.text.strip()
 
         update_available = latest_version != current_version
