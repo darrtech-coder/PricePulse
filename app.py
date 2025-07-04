@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request, send_file, render_template
 import sqlite3
 import os
 import json
+import subprocess
 from datetime import datetime
 from dateutil.parser import parse as parse_date
 from utils import fetch_price_from_url
@@ -12,6 +13,16 @@ app = Flask(__name__)
 DB_FILE = "database.db"
 SUPPLIER_FILE = "suppliers.txt"
 CATEGORY_FILE = "categories.txt"
+
+VERSION_FILE = os.path.join(os.path.dirname(__file__), "version")
+
+def get_current_version():
+    try:
+        with open(VERSION_FILE, "r") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return "0.0.0"  # fallback if file missing
+
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -214,6 +225,38 @@ def analytics():
         result[cat].append(price)
     result = {k: sum(v)/len(v) for k, v in result.items() if v}
     return jsonify(result)
+
+@app.route("/api/check-updates")
+def check_updates():
+    try:
+        current_version = get_current_version()
+        remote_version_url = "https://raw.githubusercontent.com/darrtech-coder/PricePulse/main/version"
+        response = requests.get(remote_version_url, timeout=5)
+        latest_version = response.text.strip()
+
+        update_available = latest_version != current_version
+        return jsonify({
+            "updateAvailable": update_available,
+            "version": latest_version
+        })
+    except Exception as e:
+        print(f"[Update Check Error] {e}")
+        return jsonify({"error": "Failed to check for updates"}), 500
+
+@app.route("/api/install-updates", methods=["POST"])
+def install_updates():
+    try:
+        # Optional: ensure you're in the project root
+        repo_path = os.path.dirname(os.path.abspath(__file__))
+        subprocess.check_call(["git", "pull"], cwd=repo_path)
+
+        # Optional: you can also re-read version file to confirm update
+        new_version = get_current_version()
+
+        return jsonify({"message": f"Update installed. Current version: {new_version}"})
+    except subprocess.CalledProcessError as e:
+        print(f"[Update Install Error] {e}")
+        return jsonify({"error": "Update failed"}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000, debug=True)
