@@ -4,6 +4,7 @@ import os
 import json
 import subprocess
 import requests
+import subprocess
 from datetime import datetime
 from dateutil.parser import parse as parse_date
 from utils import fetch_price_from_url
